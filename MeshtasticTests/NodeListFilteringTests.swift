@@ -95,6 +95,9 @@ struct NodeListFilteringTests {
 		user.shortName = shortName
 		user.role = role
 		user.pkiEncrypted = pkiEncrypted
+		// Search runs against the denormalized `searchIndex` column, populated by every production
+		// write path; mirror that here so the fixture is searchable.
+		user.updateSearchIndex()
 		sharedModelContainer.mainContext.insert(user)
 		node.user = user
 	}

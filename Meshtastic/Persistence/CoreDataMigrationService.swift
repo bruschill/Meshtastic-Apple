@@ -271,6 +271,7 @@ private extension CoreDataMigrationService {
 			   let sdNode = nodeMap[cdNode.objectID] {
 				sd.userNode = sdNode
 			}
+			sd.updateSearchIndex()
 			sdContext.insert(sd)
 			map[obj.objectID] = sd
 		}

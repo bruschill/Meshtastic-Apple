@@ -254,6 +254,7 @@ func createUser(num: Int64, context: ModelContext) throws -> UserEntity {
 	newUser.shortName = last4
 	newUser.hwModel = "UNSET"
 	newUser.unmessagable = false
+	newUser.updateSearchIndex()
 	context.insert(newUser)
 	return newUser
 }

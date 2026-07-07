@@ -238,7 +238,9 @@ struct NodePredicateInputs: Equatable {
 
 /// Builds the query-level predicate (ignored/favorite/viaLora/viaMqtt/hopsAway). Used by BOTH the
 /// `@Query` in `FilteredNodeList.init` and the off-main `computeNodeOrder`, guaranteeing identical
-/// filtering on both sides of the isolation boundary.
+/// filtering on both sides of the isolation boundary. Search is handled separately (see
+/// `computeNodeOrder`) — combining a relationship-crossing `searchIndex.contains` clause into this
+/// expression blows the `#Predicate` type-check budget.
 ///
 /// `applyFavoriteFilter` lets the off-main fetch drop the `favorite` gate so it stays a SUPERSET for
 /// that locally-mutable flag: a node just toggled favorite in the live context may not yet be visible
@@ -256,9 +258,8 @@ func makeNodeListPredicate(_ p: NodePredicateInputs, applyFavoriteFilter: Bool =
 	let filterHopsMax = p.filterHopsMax
 	let maxHops = p.maxHops
 	return #Predicate<NodeInfoEntity> { node in
-		// Ignored filter (always applied)
-		(showIgnored || !node.ignored) &&
-		(!showIgnored || node.ignored) &&
+		// Ignored filter (show ignored xor show non-ignored)
+		node.ignored == showIgnored &&
 		// Favorite filter
 		(!showFavorite || node.favorite) &&
 		// Via LoRa only (exclude MQTT)
@@ -269,6 +270,26 @@ func makeNodeListPredicate(_ p: NodePredicateInputs, applyFavoriteFilter: Bool =
 		(!filterHopsDirect || node.hopsAway == 0) &&
 		// Hops within range
 		(!filterHopsMax || (node.hopsAway > 0 && node.hopsAway <= maxHops))
+	}
+}
+
+/// Fetches the `num`s of users whose denormalized `searchIndex` contains the (already-normalized)
+/// term. A standalone predicate so it stays within the `#Predicate` type-check budget; runs as a
+/// single SQLite `LIKE` on `UserEntity`. `propertiesToFetch = [\.num]` keeps the fetch to the one
+/// column we need instead of materializing each matched user's full object graph.
+///
+/// Returns nil in two cases the caller treats identically (no search narrowing): there is no search
+/// term, or the fetch failed. Degrading a fetch error to "unfiltered" is deliberate — returning an
+/// empty set would be indistinguishable from "zero matches" and would hide every node.
+private func searchMatchingUserNums(term: String, context: ModelContext) -> Set<Int64>? {
+	guard !term.isEmpty else { return nil }
+	var descriptor = FetchDescriptor<UserEntity>(predicate: #Predicate { $0.searchIndex.contains(term) })
+	descriptor.propertiesToFetch = [\.num]
+	do {
+		return Set(try context.fetch(descriptor).map(\.num))
+	} catch {
+		Logger.data.error("🔎 Node-list search fetch failed; showing unfiltered: \(error.localizedDescription, privacy: .public)")
+		return nil
 	}
 }
 
@@ -291,7 +312,7 @@ struct FilterSnapshot: Sendable {
 
 	@MainActor init(_ f: NodeFilterParameters, activeNodeNum: Int64?) {
 		predicate = NodePredicateInputs(f)
-		normalizedSearchText = f.searchText.lowercased()
+		normalizedSearchText = UserEntity.normalizeForSearch(f.searchText)
 		roleFilter = f.roleFilter
 		deviceRoles = f.deviceRoles
 		onlineThreshold = f.isOnline ? Date().addingTimeInterval(-7_200) : nil
@@ -379,6 +400,10 @@ func computeNodeOrder(container: ModelContainer, snapshot s: FilterSnapshot) -> 
 		return nil
 	}
 
+	// Search is resolved by a separate SQLite LIKE over UserEntity.searchIndex (no per-node relationship
+	// fault, no Swift ICU scan); intersect by num. nil = no search term → no narrowing.
+	let searchNums = searchMatchingUserNums(term: s.normalizedSearchText, context: context)
+
 	let lookup = NodeListFilterLookup(
 		nodes: nodes,
 		needsEnvironment: s.isEnvironment,
@@ -389,8 +414,10 @@ func computeNodeOrder(container: ModelContainer, snapshot s: FilterSnapshot) -> 
 	seen.reserveCapacity(nodes.count)
 	var matching: [Int64] = []
 	matching.reserveCapacity(nodes.count)
-	for node in nodes where matchesPostPredicate(node, snapshot: s, lookup: lookup) {
+	for node in nodes {
 		let num = node.num
+		if let searchNums, !searchNums.contains(num) { continue }
+		guard matchesPostPredicate(node, snapshot: s, lookup: lookup) else { continue }
 		if seen.insert(num).inserted { matching.append(num) }
 	}
 	return matching
@@ -763,28 +790,16 @@ private struct NodeListFilterLookup {
 //  Meshtastic
 //
 
-/// The in-memory post-predicate match (search + role/online/pki/environment/distance), reading a
-/// Sendable `FilterSnapshot` so it can run OFF the main actor. Mirrors the filters NOT pushed into
-/// the @Query predicate. (Was a `NodeFilterParameters` extension; converted to a free function so
-/// the off-main scan doesn't touch the @MainActor filter object.)
+/// The in-memory post-predicate match (role/online/pki/environment/distance), reading a Sendable
+/// `FilterSnapshot` so it can run OFF the main actor. Mirrors the filters NOT pushed into the fetch
+/// predicate. Search is now handled in the fetch itself (see `makeNodeListPredicate`), so it is not
+/// re-checked here. (Was a `NodeFilterParameters` extension; converted to a free function so the
+/// off-main scan doesn't touch the @MainActor filter object.)
 private func matchesPostPredicate(
 	_ node: NodeInfoEntity,
 	snapshot s: FilterSnapshot,
 	lookup: NodeListFilterLookup
 ) -> Bool {
-	// Search text (requires relationship traversal)
-	if !s.normalizedSearchText.isEmpty {
-		let matchesSearch = [
-			node.user?.userId,
-			node.user?.numString,
-			node.user?.hwModel,
-			node.user?.hwDisplayName,
-			node.user?.longName,
-			node.user?.shortName
-		].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(s.normalizedSearchText) }
-		if !matchesSearch { return false }
-	}
-
 	// Role filter (requires relationship traversal)
 	if s.roleFilter && !s.deviceRoles.isEmpty {
 		guard let role = node.user?.role else { return false }

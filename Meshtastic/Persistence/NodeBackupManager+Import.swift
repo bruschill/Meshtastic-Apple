@@ -61,6 +61,9 @@ extension NodeBackupManager {
 			if let srcNode = src.userNode, let liveNode = nodesByNum[srcNode.num] {
 				dst.userNode = liveNode
 			}
+			// Recompute rather than copy src.searchIndex so an older backup (pre-searchIndex, or a
+			// stale value) always lands with an index consistent with the current field set.
+			dst.updateSearchIndex()
 			liveContext.insert(dst)
 			usersByNum[dst.num] = dst
 		}

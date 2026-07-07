@@ -325,6 +325,7 @@ func findOrCreateUser(num: Int64, context: ModelContext) -> UserEntity {
 	newUser.longName = "Meshtastic \(last4)"
 	newUser.shortName = last4
 	newUser.hwModel = "UNSET"
+	newUser.updateSearchIndex()
 	context.insert(newUser)
 	return newUser
 }

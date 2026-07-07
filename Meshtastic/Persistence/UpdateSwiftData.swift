@@ -416,6 +416,7 @@ extension MeshPackets {
 						if let hardwareEntity = try? modelContext.fetch(hwDescriptor1).first {
 							newUser.hwDisplayName = hardwareEntity.displayName
 						}
+						newUser.updateSearchIndex()
 						newNode.user = newUser
 						
 						if UserDefaults.newNodeNotifications {
@@ -523,6 +524,7 @@ extension MeshPackets {
 							if let hardwareEntity = try? modelContext.fetch(hwDescriptor2).first {
 								user.hwDisplayName = hardwareEntity.displayName
 							}
+							user.updateSearchIndex()
 						}
 					}
 				} else if let userMessage = try? User(serializedBytes: packet.decoded.payload), !userMessage.id.isEmpty {
@@ -550,6 +552,7 @@ extension MeshPackets {
 						fetchedNode[0].user?.pkiEncrypted = true
 						fetchedNode[0].user?.publicKey = userMessage.publicKey
 					}
+					fetchedNode[0].user?.updateSearchIndex()
 					if packet.hopStart != 0 && packet.hopLimit <= packet.hopStart {
 						fetchedNode[0].hopsAway = Int32(packet.hopStart - packet.hopLimit)
 					}

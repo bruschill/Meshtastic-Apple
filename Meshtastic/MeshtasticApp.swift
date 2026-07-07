@@ -124,6 +124,13 @@ struct MeshtasticAppleApp: App {
 		}
 #endif
 
+		// Backfill the denormalized user search index for rows created before the column existed.
+		// Off-main, one-time (guarded by a UserDefaults marker), and a no-op under tests. Placed after
+		// the DEBUG seed block so a perf-seed reset (which clears the marker) is honored on this launch.
+		if let persistenceController {
+			SearchIndexBackfiller.backfillIfNeeded(container: persistenceController.container)
+		}
+
 		if !Self.isRunningTests {
 			// Initialize map data manager
 			MapDataManager.shared.initialize()

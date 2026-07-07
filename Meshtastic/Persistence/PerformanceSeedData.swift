@@ -106,6 +106,9 @@ enum PerformanceSeedData {
 		let requestedMessageCount = configuration.directMessageCount + configuration.channelMessageCount
 		if configuration.resetStore {
 			controller.clearDatabase()
+			// The wipe removes the seeded rows' indexes too; clear the completion marker so the
+			// one-time search-index backfill re-runs against the fresh store on this launch.
+			SearchIndexBackfiller.resetCompletionMarker()
 		} else if existingNodeCount(context: context) >= configuration.nodeCount {
 			if requestedMessageCount > 0 && existingMessageCount(context: context) < requestedMessageCount {
 				seedMessageHistory(baseNodeNum: 0x0A00_0000, now: Date(), configuration: configuration, context: context)
@@ -220,6 +223,10 @@ enum PerformanceSeedData {
 		if configuration.style == .marketing {
 			MarketingSeed.apply(to: node, user: user, metadata: metadata, index: index, now: now)
 		}
+
+		// After any name/hw rewrites — keep the denormalized search index in sync so seeded nodes are
+		// searchable without waiting on the runtime backfill.
+		user.updateSearchIndex()
 
 		context.insert(node)
 		context.insert(user)

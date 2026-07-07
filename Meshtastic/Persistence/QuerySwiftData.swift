@@ -48,6 +48,7 @@ func getUser(id: Int64, context: ModelContext) -> UserEntity {
 	}
 	let newUser = UserEntity()
 	newUser.num = id
+	newUser.updateSearchIndex()
 	context.insert(newUser)
 	return newUser
 }

@@ -937,3 +937,111 @@ struct PersistenceErrorTests {
 		#expect(user.userId == Int64(0xDEADBEEF).toHex())
 	}
 }
+
+// MARK: - Search Index Backfill
+// `SearchIndexBackfiller` fills `UserEntity.searchIndex` for rows persisted before the column
+// existed (the additive migration lands them with the default ""). These use an isolated in-memory
+// container so `num` (unique) never collides with the shared test container.
+
+@Suite("SearchIndexBackfiller")
+struct SearchIndexBackfillerTests {
+
+	@MainActor
+	private func makeIsolatedContainer() throws -> ModelContainer {
+		let schema = Schema(versionedSchema: MeshtasticSchema.current)
+		let config = ModelConfiguration(
+			"SearchIndexBackfillerTests-\(UUID().uuidString)",
+			schema: schema,
+			isStoredInMemoryOnly: true,
+			allowsSave: true
+		)
+		return try ModelContainer(for: schema, migrationPlan: MeshtasticMigrationPlan.self, configurations: config)
+	}
+
+	@Test @MainActor func backfillPopulatesEmptyIndexes() async throws {
+		let container = try makeIsolatedContainer()
+		let context = container.mainContext
+
+		// Pre-migration rows: searchable fields set, but the index is still the "" default.
+		let rooftop = UserEntity()
+		rooftop.num = 111
+		rooftop.userId = "!0000006f"
+		rooftop.longName = "Rooftop Node"
+		rooftop.shortName = "RTN"
+		rooftop.hwModel = "TBEAM"
+		let basement = UserEntity()
+		basement.num = 222
+		basement.longName = "Basement"
+		context.insert(rooftop)
+		context.insert(basement)
+		try context.save()
+		#expect(rooftop.searchIndex.isEmpty)
+		#expect(basement.searchIndex.isEmpty)
+
+		let updated = try await SearchIndexBackfiller(modelContainer: container).backfill()
+		#expect(updated == 2)
+
+		// Read through a fresh context so we observe the actor's persisted writes, not cached objects.
+		let verify = ModelContext(container)
+		let users = try verify.fetch(FetchDescriptor<UserEntity>())
+		#expect(users.count == 2)
+		for user in users {
+			#expect(!user.searchIndex.isEmpty)
+			#expect(user.searchIndex == UserEntity.makeSearchIndex(
+				num: user.num,
+				userId: user.userId,
+				numString: user.numString,
+				hwModel: user.hwModel,
+				hwDisplayName: user.hwDisplayName,
+				longName: user.longName,
+				shortName: user.shortName
+			))
+		}
+		// Matches the NodeList read path: the lowercased search term hits the denormalized index.
+		let rooftopIndex = users.first { $0.num == 111 }?.searchIndex
+		#expect(rooftopIndex?.contains("rooftop") == true)
+		#expect(rooftopIndex?.contains("111") == true)  // String(num) is always included
+	}
+
+	@Test @MainActor func backfillIsIdempotentAndPreservesExistingIndex() async throws {
+		let container = try makeIsolatedContainer()
+		let context = container.mainContext
+
+		let keeper = UserEntity()
+		keeper.num = 333
+		keeper.longName = "Keeper"
+		keeper.updateSearchIndex()  // already indexed by a normal write path
+		let original = keeper.searchIndex
+		context.insert(keeper)
+		try context.save()
+
+		let updated = try await SearchIndexBackfiller(modelContainer: container).backfill()
+		#expect(updated == 0)  // a populated index is never empty, so it is never recomputed
+
+		let verify = ModelContext(container)
+		let again = try verify.fetch(FetchDescriptor<UserEntity>()).first
+		#expect(again?.searchIndex == original)
+	}
+
+	@Test @MainActor func backfillPagesPastBatchSize() async throws {
+		let container = try makeIsolatedContainer()
+		let context = container.mainContext
+
+		for index in 0..<25 {
+			let user = UserEntity()
+			user.num = Int64(1000 + index)
+			user.longName = "Node \(index)"
+			context.insert(user)
+		}
+		try context.save()
+
+		// batchSize smaller than the row count exercises the offset paging loop.
+		let updated = try await SearchIndexBackfiller(modelContainer: container).backfill(batchSize: 10)
+		#expect(updated == 25)
+
+		let verify = ModelContext(container)
+		let users = try verify.fetch(FetchDescriptor<UserEntity>())
+		#expect(users.count == 25)
+		#expect(users.allSatisfy { !$0.searchIndex.isEmpty })
+	}
+}

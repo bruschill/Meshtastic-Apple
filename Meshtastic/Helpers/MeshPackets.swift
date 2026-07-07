@@ -129,6 +129,13 @@ actor MeshPackets {
 			return
 		}
 		guard modelContext.hasChanges else { return }
+		// Belt-and-suspenders: a UserEntity queued for insert without a computed searchIndex would be
+		// invisible to the node-list search. Self-heal here so a missed write site degrades to
+		// "indexed at save" instead of "permanently unsearchable". Cheap — only brand-new inserts
+		// whose index is still empty (String(num) guarantees a populated index is never "").
+		for case let user as UserEntity in modelContext.insertedModelsArray where user.searchIndex.isEmpty {
+			user.updateSearchIndex()
+		}
 		do {
 			try modelContext.save()
 			Logger.data.debug("💾 [\(caller, privacy: .public)] Saved pending changes")
@@ -507,6 +514,7 @@ actor MeshPackets {
 							} else {
 								newUser.unmessagable = false
 							}}
+						newUser.updateSearchIndex()
 						newNode.user = newUser
 					} else if nodeInfo.num > Constants.minimumNodeNum {
 						do {
@@ -615,6 +623,7 @@ actor MeshPackets {
 							if let hardwareEntity = try? modelContext.fetch(hwDescriptor2).first {
 								user.hwDisplayName = hardwareEntity.displayName
 							}
+							user.updateSearchIndex()
 						}
 					} else {
 						if fetchedNode[0].user == nil && nodeInfo.num > Constants.minimumNodeNum {
