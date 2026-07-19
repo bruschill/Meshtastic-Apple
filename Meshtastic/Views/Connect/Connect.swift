@@ -23,6 +23,7 @@ struct Connect: View {
 	@EnvironmentObject var lockdown: LockdownCoordinator
 	@Environment(\.colorScheme) private var colorScheme
 	@Environment(\.openURL) private var openURL
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	@State var router: Router
 	@State var node: NodeInfoEntity?
 	/// Cached battery level for the connected node. Refreshed on an interval (see `.task`)
@@ -165,7 +166,7 @@ struct Connect: View {
 											HStack {
 												Image(systemName: "square.stack.3d.down.forward")
 													.symbolRenderingMode(.multicolor)
-													.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3))
+													.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3), isActive: !reduceMotion)
 													.foregroundColor(.teal)
 												if let expectedNodeDBSize = accessoryManager.expectedNodeDBSize {
 													if UIDevice.current.userInterfaceIdiom == .phone {
@@ -192,7 +193,7 @@ struct Connect: View {
 											HStack {
 												Image(systemName: "square.stack.3d.down.forward")
 													.symbolRenderingMode(.multicolor)
-													.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3))
+													.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3), isActive: !reduceMotion)
 													.foregroundColor(.orange)
 												Text("Communicating").font(.callout)
 													.foregroundColor(.orange)
@@ -201,7 +202,7 @@ struct Connect: View {
 											HStack {
 												Image(systemName: "square.stack.3d.down.forward")
 													.symbolRenderingMode(.multicolor)
-													.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3))
+													.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3), isActive: !reduceMotion)
 													.foregroundColor(.orange)
 												Text("Retrying (attempt \(attempt))").font(.callout)
 													.foregroundColor(.orange)

@@ -13,6 +13,7 @@ import SwiftUI
 // MARK: - Activity row
 
 private struct ActivityRow: View {
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	let systemImage: String
 	let label: String
 
@@ -22,7 +23,7 @@ private struct ActivityRow: View {
 				.font(.system(size: 32))
 				.symbolRenderingMode(.hierarchical)
 				.symbolEffect(.variableColor.reversing.cumulative,
-							  options: .repeat(20).speed(2))
+							  options: .repeat(20).speed(2), isActive: !reduceMotion)
 				.foregroundColor(.accentColor)
 				.frame(width: 44)
 			Text(label)

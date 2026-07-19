@@ -19,6 +19,7 @@ struct PositionPopover: View {
 	let distanceFormatter = MKDistanceFormatter()
 	
 	@State private var navigateToCompass = false
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 
 	var body: some View {
 		// Node Color from node.num
@@ -200,7 +201,7 @@ struct PositionPopover: View {
 							}
 							if position.nodePosition?.hasDetectionSensorMetrics ?? false {
 								Image(systemName: "sensor.fill")
-									.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3))
+									.symbolEffect(.variableColor.reversing.cumulative, options: .repeat(20).speed(3), isActive: !reduceMotion)
 									.symbolRenderingMode(.hierarchical)
 									.foregroundColor(.accentColor)
 									.font(.largeTitle)
