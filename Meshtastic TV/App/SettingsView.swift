@@ -41,6 +41,7 @@ struct SettingsView: View {
 				} label: {
 					Label("Clear Node Database", systemImage: "trash")
 				}
+				.accessibilityHint("Permanently removes all saved nodes")
 			} header: {
 				Text("Data")
 			} footer: {

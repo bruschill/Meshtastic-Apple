@@ -87,6 +87,7 @@ struct MapScreen: View {
 					} label: {
 						Label("Re-center Map", systemImage: "scope")
 					}
+					.accessibilityHint("Zooms the map to show all nodes")
 					NavigationLink {
 						SettingsView()
 					} label: {
@@ -97,6 +98,7 @@ struct MapScreen: View {
 					} label: {
 						Label("Disconnect", systemImage: "xmark.circle.fill")
 					}
+					.accessibilityHint("Ends the connection to the radio")
 					.alert("Disconnect?", isPresented: $confirmDisconnect) {
 						Button("Disconnect", role: .destructive) { client.disconnect() }
 						Button("Cancel", role: .cancel) { }
@@ -117,7 +119,12 @@ struct MapScreen: View {
 				}
 			}
 			.onChange(of: focusedNodeNum) { _, newValue in
-				if let newValue { selectedNodeNum = newValue }
+				if let newValue {
+					selectedNodeNum = newValue
+					if let node = locatedNodes.first(where: { $0.num == newValue }) {
+						AccessibilityNotification.Announcement("Map centered on \(node.displayName)").post()
+					}
+				}
 			}
 			.navigationDestination(for: UInt32.self) { num in
 				if let node = allNodes.first(where: { $0.num == num }) {
@@ -137,6 +144,7 @@ struct MapScreen: View {
 					.resizable()
 					.scaledToFit()
 					.frame(height: TVTheme.wordmarkHeight)
+					.accessibilityHidden(true)
 				Text(client.host)
 					.font(.caption)
 					.foregroundStyle(.secondary)
@@ -189,6 +197,7 @@ private struct NodeRow: View {
 				circleSize: TVTheme.listAvatarSize
 			)
 			.opacity(node.hasLocation ? 1 : 0.55)
+			.accessibilityHidden(true)
 
 			VStack(alignment: .leading, spacing: 6) {
 				Text(node.displayName)
@@ -202,6 +211,7 @@ private struct NodeRow: View {
 							Image(systemName: node.isOnline ? "checkmark.circle.fill" : "moon.circle.fill")
 								.foregroundStyle(node.isOnline ? Color("MeshtasticSuccess") : Color("MeshtasticWarning"))
 						}
+						.accessibilityLabel(node.isOnline ? "Online" : "Offline")
 					}
 					if let role = node.nodeRole {
 						Label(role.name, systemImage: role.systemName)
@@ -216,5 +226,6 @@ private struct NodeRow: View {
 			}
 			Spacer()
 		}
+		.accessibilityElement(children: .combine)
 	}
 }

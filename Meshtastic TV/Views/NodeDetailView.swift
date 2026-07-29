@@ -70,6 +70,7 @@ struct NodeDetailView: View {
 				color: Color(UIColor(hex: node.num)),
 				circleSize: TVTheme.detailAvatarSize
 			)
+			.accessibilityHidden(true)
 			Text(node.displayName)
 				.font(.system(size: nameFont, weight: .bold, design: .rounded))
 				.lineLimit(2)
@@ -123,6 +124,8 @@ private struct DetailRow: View {
 		)
 		.focusable()
 		.focused($focused)
+		.accessibilityElement(children: .combine)
+		.accessibilityAddTraits(.isStaticText)
 		.animation(.easeInOut(duration: 0.15), value: focused)
 	}
 }

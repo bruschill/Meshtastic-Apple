@@ -40,6 +40,17 @@ struct RootView: View {
 				client.autoConnectIfSaved()
 			}
 		}
+		.onChange(of: client.state) { _, newState in
+			let message: String? = switch newState {
+			case .connected: "Connected"
+			case .disconnected: "Connection lost"
+			case .failed(let reason): "Connection failed: \(reason)"
+			case .connecting: nil
+			}
+			if let message {
+				AccessibilityNotification.Announcement(message).post()
+			}
+		}
 	}
 }
 
@@ -53,6 +64,7 @@ private struct ConnectingView: View {
 				.resizable()
 				.scaledToFit()
 				.frame(width: 280)
+				.accessibilityHidden(true)
 			ProgressView()
 				.scaleEffect(1.6)
 			Text("Connecting to \(host)…")
