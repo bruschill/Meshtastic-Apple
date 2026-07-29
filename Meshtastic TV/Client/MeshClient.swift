@@ -51,14 +51,27 @@ final class MeshClient {
 	/// an attempt still awaiting the TCP handshake — otherwise a stale attempt could resume later and
 	/// clobber the connection/consumeTask a newer attempt already set up, orphaning its TCPConnection.
 	private var connectTask: Task<Void, Never>?
+	/// Pending reconnect-after-backoff task. Stored so `disconnect()` can cancel it.
+	private var reconnectTask: Task<Void, Never>?
+	private var reconnectAttempt: Int = 0
+	private var userInitiatedDisconnect = false
+	private var lastPort: Int = 4403
 
 	// MARK: - Connect / disconnect
 
 	func connect(host: String, port: Int) {
-		disconnect()
+		teardown()
+		reconnectTask?.cancel()
+		reconnectTask = nil
+		userInitiatedDisconnect = false
 		self.host = host
+		self.lastPort = port
 		state = .connecting
 		myNodeNum = nil
+
+		UserDefaults.standard.set(host, forKey: "tv.lastHost")
+		UserDefaults.standard.set(String(port), forKey: "tv.lastPort")
+
 		// Note: the persisted node store is intentionally NOT cleared here — keeping
 		// it is what leaves the map populated across relaunches until the radio's
 		// fresh node-DB dump updates it.
@@ -93,12 +106,40 @@ final class MeshClient {
 				// to .failed. Unwind quietly; the newer attempt owns `state` now.
 				guard !Task.isCancelled else { return }
 				Logger.transport.error("📺 [MeshClient] connect failed: \(error.localizedDescription, privacy: .public)")
-				self.state = .failed(error.localizedDescription)
+				self.scheduleReconnect()
 			}
 		}
 	}
 
+	/// User-initiated disconnect. Cancels any pending reconnect and marks the
+	/// disconnect as intentional so the backoff loop won't restart.
 	func disconnect() {
+		userInitiatedDisconnect = true
+		reconnectTask?.cancel()
+		reconnectTask = nil
+		teardown()
+		state = .disconnected
+	}
+
+	/// Reads persisted host/port from UserDefaults and connects if the app is
+	/// idle. Called on launch and when returning to foreground.
+	func autoConnectIfSaved() {
+		switch state {
+		case .disconnected, .failed:
+			break
+		default:
+			return
+		}
+		guard let host = UserDefaults.standard.string(forKey: "tv.lastHost"),
+			  !host.isEmpty else { return }
+		let portString = UserDefaults.standard.string(forKey: "tv.lastPort") ?? "4403"
+		let port = Int(portString) ?? 4403
+		connect(host: host, port: port)
+	}
+
+	/// Tears down the active connection and in-flight tasks without touching
+	/// user-intent flags or the reconnect loop.
+	private func teardown() {
 		connectTask?.cancel()
 		connectTask = nil
 		consumeTask?.cancel()
@@ -106,7 +147,6 @@ final class MeshClient {
 		let conn = connection
 		connection = nil
 		Task { try? await conn?.disconnect(withError: nil, shouldReconnect: false) }
-		state = .disconnected
 	}
 
 	private func makeWantConfig(_ nonce: UInt32) -> ToRadio {
@@ -122,11 +162,40 @@ final class MeshClient {
 		case .data(let fromRadio):
 			ingest(fromRadio)
 		case .disconnected:
-			state = .disconnected
-		case .error(let error), .errorWithoutReconnect(let error):
+			scheduleReconnect()
+		case .error(let error):
+			Logger.transport.error("📺 [MeshClient] connection error: \(error.localizedDescription, privacy: .public)")
+			scheduleReconnect()
+		case .errorWithoutReconnect(let error):
 			state = .failed(error.localizedDescription)
 		case .logMessage, .rssiUpdate:
 			break
+		}
+	}
+
+	/// Schedules a reconnect attempt with exponential backoff (1s, 2s, 4s … 30s cap).
+	/// Skipped when the user explicitly disconnected. Sets state to `.connecting` so
+	/// ConnectingView (with its Cancel button) shows during the wait.
+	private func scheduleReconnect() {
+		guard !userInitiatedDisconnect else {
+			state = .disconnected
+			return
+		}
+
+		reconnectTask?.cancel()
+		state = .connecting
+
+		let attempt = reconnectAttempt
+		reconnectAttempt += 1
+		let delay = min(pow(2.0, Double(attempt)), 30.0)
+
+		Logger.transport.info("📺 [MeshClient] reconnecting in \(delay, privacy: .public)s (attempt \(attempt + 1, privacy: .public))")
+
+		reconnectTask = Task {
+			try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+			guard !Task.isCancelled else { return }
+			self.reconnectTask = nil
+			self.connect(host: self.host, port: self.lastPort)
 		}
 	}
 
@@ -144,6 +213,7 @@ final class MeshClient {
 
 		case .configCompleteID:
 			// Initial dump finished — we have the node database; go live.
+			reconnectAttempt = 0
 			if state != .connected { state = .connected }
 
 		default:

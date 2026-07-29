@@ -30,9 +30,15 @@ struct RootView: View {
 		// screensaver never interrupts the mesh map while the app is foregrounded.
 		// Re-asserted on every active transition because the system can reset the
 		// flag when the app returns to the foreground.
-		.onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+		.onAppear {
+			UIApplication.shared.isIdleTimerDisabled = true
+			client.autoConnectIfSaved()
+		}
 		.onChange(of: scenePhase) { _, phase in
 			UIApplication.shared.isIdleTimerDisabled = (phase == .active)
+			if phase == .active {
+				client.autoConnectIfSaved()
+			}
 		}
 	}
 }
