@@ -22,6 +22,7 @@ struct MapScreen: View {
 	// the map selection (debounced map-side).
 	@FocusState private var focusedNodeNum: UInt32?
 	@State private var navPath: [UInt32] = []
+	@State private var confirmDisconnect = false
 
 	/// The persisted node store — the map and list read from here, not the client.
 	@Query private var allNodes: [MeshNode]
@@ -92,9 +93,15 @@ struct MapScreen: View {
 						Label("Settings", systemImage: "gearshape")
 					}
 					Button(role: .destructive) {
-						client.disconnect()
+						confirmDisconnect = true
 					} label: {
 						Label("Disconnect", systemImage: "xmark.circle.fill")
+					}
+					.alert("Disconnect?", isPresented: $confirmDisconnect) {
+						Button("Disconnect", role: .destructive) { client.disconnect() }
+						Button("Cancel", role: .cancel) { }
+					} message: {
+						Text("This will end the connection to \(client.host).")
 					}
 				}
 
