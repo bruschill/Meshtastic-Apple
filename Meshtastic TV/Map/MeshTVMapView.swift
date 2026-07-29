@@ -205,7 +205,7 @@ final class SelectionHaloView: MKAnnotationView {
 		ring.frame = bounds
 		ring.layer.cornerRadius = d / 2
 		ring.layer.borderWidth = 5
-		ring.layer.borderColor = UIColor.white.cgColor
+		ring.layer.borderColor = UIColor.white.withAlphaComponent(0.7).cgColor
 		ring.backgroundColor = UIColor.white.withAlphaComponent(0.15)
 		ring.isUserInteractionEnabled = false
 		addSubview(ring)
@@ -255,21 +255,57 @@ final class SelectionHaloView: MKAnnotationView {
 		}
 	}
 
+	private var motionObserver: NSObjectProtocol?
+
 	/// Layer animations are stripped whenever the view leaves the window, so the
 	/// pulse must be (re)attached on every return — not in init.
 	override func didMoveToWindow() {
 		super.didMoveToWindow()
-		guard window != nil else { return }
+		if window != nil {
+			attachPulseIfAllowed()
+			if motionObserver == nil {
+				motionObserver = NotificationCenter.default.addObserver(
+					forName: UIAccessibility.reduceMotionStatusDidChangeNotification,
+					object: nil,
+					queue: .main
+				) { [weak self] _ in
+					guard let self, self.window != nil else { return }
+					if UIAccessibility.isReduceMotionEnabled {
+						self.removePulse()
+					} else {
+						self.attachPulseIfAllowed()
+					}
+				}
+			}
+		} else {
+			if let observer = motionObserver {
+				NotificationCenter.default.removeObserver(observer)
+				motionObserver = nil
+			}
+		}
+	}
+
+	private func attachPulseIfAllowed() {
 		guard !UIAccessibility.isReduceMotionEnabled else { return }
 		guard ring.layer.animation(forKey: "haloPulse") == nil else { return }
 		let pulse = CABasicAnimation(keyPath: "transform.scale")
 		pulse.fromValue = 1.0
-		pulse.toValue = 1.12
+		pulse.toValue = 1.06
 		pulse.duration = 1.0
 		pulse.autoreverses = true
 		pulse.repeatCount = .infinity
 		pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 		ring.layer.add(pulse, forKey: "haloPulse")
+	}
+
+	private func removePulse() {
+		ring.layer.removeAnimation(forKey: "haloPulse")
+	}
+
+	deinit {
+		if let observer = motionObserver {
+			NotificationCenter.default.removeObserver(observer)
+		}
 	}
 
 	override var canBecomeFocused: Bool { false }
@@ -461,7 +497,8 @@ struct MeshTVMapView: UIViewRepresentable {
 			let spanRatio = mapView.region.span.latitudeDelta
 				/ max(target.span.latitudeDelta, 0.0001)
 			let bigJump = meters > 80_000 || spanRatio > 4 || spanRatio < 0.25
-			mapView.setRegion(target, animated: !bigJump)
+			let reduceMotion = UIAccessibility.isReduceMotionEnabled
+			mapView.setRegion(target, animated: !bigJump && !reduceMotion)
 		}
 
 		/// Fit the camera to every located node's reported position.
@@ -574,7 +611,7 @@ struct MeshTVMapView: UIViewRepresentable {
 					: MKCoordinateRegion(center: annotation.coordinate, span: mapView.region.span)
 				// Cut (no animation) if another selection is already queued — the user
 				// is scrolling fast and an animated fly would just get cancelled.
-				mapView.setRegion(target, animated: true)
+				self.setRegionSmart(mapView, target: target)
 				self.lastAppliedSelection = num
 				self.pendingSelectionNum = nil
 			}
