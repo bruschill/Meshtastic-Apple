@@ -64,6 +64,7 @@ final class MeshClient {
 		reconnectTask?.cancel()
 		reconnectTask = nil
 		userInitiatedDisconnect = false
+		reconnectAttempt = 0
 		self.host = host
 		self.lastPort = port
 		state = .connecting
@@ -124,6 +125,7 @@ final class MeshClient {
 	/// Reads persisted host/port from UserDefaults and connects if the app is
 	/// idle. Called on launch and when returning to foreground.
 	func autoConnectIfSaved() {
+		guard !userInitiatedDisconnect else { return }
 		switch state {
 		case .disconnected, .failed:
 			break

@@ -210,8 +210,9 @@ private struct NodeRow: View {
 						} icon: {
 							Image(systemName: node.isOnline ? "checkmark.circle.fill" : "moon.circle.fill")
 								.foregroundStyle(node.isOnline ? Color("MeshtasticSuccess") : Color("MeshtasticWarning"))
+								.accessibilityHidden(true)
 						}
-						.accessibilityLabel(node.isOnline ? "Online" : "Offline")
+						.accessibilityLabel("\(node.isOnline ? "Online" : "Offline"), \(lastHeard.formatted(.relative(presentation: .named)))")
 					}
 					if let role = node.nodeRole {
 						Label(role.name, systemImage: role.systemName)
