@@ -30,9 +30,26 @@ struct RootView: View {
 		// screensaver never interrupts the mesh map while the app is foregrounded.
 		// Re-asserted on every active transition because the system can reset the
 		// flag when the app returns to the foreground.
-		.onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+		.onAppear {
+			UIApplication.shared.isIdleTimerDisabled = true
+			client.autoConnectIfSaved()
+		}
 		.onChange(of: scenePhase) { _, phase in
 			UIApplication.shared.isIdleTimerDisabled = (phase == .active)
+			if phase == .active {
+				client.autoConnectIfSaved()
+			}
+		}
+		.onChange(of: client.state) { _, newState in
+			let message: String? = switch newState {
+			case .connected: "Connected"
+			case .disconnected: "Connection lost"
+			case .failed(let reason): "Connection failed: \(reason)"
+			case .connecting: nil
+			}
+			if let message {
+				AccessibilityNotification.Announcement(message).post()
+			}
 		}
 	}
 }
@@ -47,6 +64,7 @@ private struct ConnectingView: View {
 				.resizable()
 				.scaledToFit()
 				.frame(width: 280)
+				.accessibilityHidden(true)
 			ProgressView()
 				.scaleEffect(1.6)
 			Text("Connecting to \(host)…")

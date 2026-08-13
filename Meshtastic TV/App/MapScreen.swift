@@ -22,6 +22,7 @@ struct MapScreen: View {
 	// the map selection (debounced map-side).
 	@FocusState private var focusedNodeNum: UInt32?
 	@State private var navPath: [UInt32] = []
+	@State private var confirmDisconnect = false
 
 	/// The persisted node store — the map and list read from here, not the client.
 	@Query private var allNodes: [MeshNode]
@@ -86,15 +87,23 @@ struct MapScreen: View {
 					} label: {
 						Label("Re-center Map", systemImage: "scope")
 					}
+					.accessibilityHint("Zooms the map to show all nodes")
 					NavigationLink {
 						SettingsView()
 					} label: {
 						Label("Settings", systemImage: "gearshape")
 					}
 					Button(role: .destructive) {
-						client.disconnect()
+						confirmDisconnect = true
 					} label: {
 						Label("Disconnect", systemImage: "xmark.circle.fill")
+					}
+					.accessibilityHint("Ends the connection to the radio")
+					.alert("Disconnect?", isPresented: $confirmDisconnect) {
+						Button("Disconnect", role: .destructive) { client.disconnect() }
+						Button("Cancel", role: .cancel) { }
+					} message: {
+						Text("This will end the connection to \(client.host).")
 					}
 				}
 
@@ -110,7 +119,12 @@ struct MapScreen: View {
 				}
 			}
 			.onChange(of: focusedNodeNum) { _, newValue in
-				if let newValue { selectedNodeNum = newValue }
+				if let newValue {
+					selectedNodeNum = newValue
+					if let node = locatedNodes.first(where: { $0.num == newValue }) {
+						AccessibilityNotification.Announcement("Map centered on \(node.displayName)").post()
+					}
+				}
 			}
 			.navigationDestination(for: UInt32.self) { num in
 				if let node = allNodes.first(where: { $0.num == num }) {
@@ -130,6 +144,7 @@ struct MapScreen: View {
 					.resizable()
 					.scaledToFit()
 					.frame(height: TVTheme.wordmarkHeight)
+					.accessibilityHidden(true)
 				Text(client.host)
 					.font(.caption)
 					.foregroundStyle(.secondary)
@@ -182,6 +197,7 @@ private struct NodeRow: View {
 				circleSize: TVTheme.listAvatarSize
 			)
 			.opacity(node.hasLocation ? 1 : 0.55)
+			.accessibilityHidden(true)
 
 			VStack(alignment: .leading, spacing: 6) {
 				Text(node.displayName)
@@ -194,7 +210,9 @@ private struct NodeRow: View {
 						} icon: {
 							Image(systemName: node.isOnline ? "checkmark.circle.fill" : "moon.circle.fill")
 								.foregroundStyle(node.isOnline ? Color("MeshtasticSuccess") : Color("MeshtasticWarning"))
+								.accessibilityHidden(true)
 						}
+						.accessibilityLabel("\(node.isOnline ? "Online" : "Offline"), \(lastHeard.formatted(.relative(presentation: .named)))")
 					}
 					if let role = node.nodeRole {
 						Label(role.name, systemImage: role.systemName)
@@ -209,5 +227,6 @@ private struct NodeRow: View {
 			}
 			Spacer()
 		}
+		.accessibilityElement(children: .combine)
 	}
 }

@@ -19,7 +19,6 @@ struct SettingsView: View {
 	@Environment(\.modelContext) private var context
 	@Query private var nodes: [MeshNode]
 	@State private var confirmClear = false
-	@FocusState private var clearFocused: Bool
 	/// MKMapType raw value, shared with MeshTVMapView via the same key.
 	@AppStorage("tv.mapType") private var mapTypeRaw: Int = Int(MKMapType.standard.rawValue)
 
@@ -42,14 +41,13 @@ struct SettingsView: View {
 				} label: {
 					Label("Clear Node Database", systemImage: "trash")
 				}
-				.focused($clearFocused)
+				.accessibilityHint("Permanently removes all saved nodes")
 			} header: {
 				Text("Data")
 			} footer: {
 				Text("Removes all \(nodes.count) saved nodes from this Apple TV. They repopulate from the radio's database on the next connection.")
 			}
 		}
-		.defaultFocus($clearFocused, true)
 		.navigationTitle("Settings")
 		.alert("Clear Node Database?", isPresented: $confirmClear) {
 			Button("Clear", role: .destructive, action: clearDatabase)

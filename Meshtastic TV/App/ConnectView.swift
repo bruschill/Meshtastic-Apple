@@ -39,6 +39,7 @@ struct ConnectView: View {
 							Label("Connect", systemImage: "network")
 						}
 						.disabled(trimmedHost.isEmpty)
+						.accessibilityHint("Connects to the entered address")
 					}
 
 					if case .failed(let message) = client.state {
@@ -67,6 +68,7 @@ struct ConnectView: View {
 				.resizable()
 				.scaledToFit()
 				.frame(width: 620)
+				.accessibilityHidden(true)
 			Text("Connect to a Meshtastic node on your network and watch the mesh live on the big screen.")
 				.font(.title3)
 				.foregroundStyle(.secondary)
@@ -102,6 +104,7 @@ struct ConnectView: View {
 									.foregroundStyle(.secondary)
 							}
 						}
+						.accessibilityElement(children: .combine)
 					}
 				}
 			}
