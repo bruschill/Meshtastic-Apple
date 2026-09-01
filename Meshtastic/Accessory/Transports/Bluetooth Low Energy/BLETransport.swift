@@ -508,20 +508,20 @@ actor BLETransport: Transport {
 		self.connectContinuation = nil
 		self.connectingPeripheral = nil
 	}
-
+	
 	func handleWillRestoreState(dict: [String: Any], central: CBCentralManager) async {
 		/// GVH - To test this you need to simulate the app getting killed in the background by the OS you can do this by stopping  the debugger while the app is connected to a device in the background
 		/// You will see Message from debugger: killed after you see this message, power off and back on your meshtastic device, bring the app back to the foreground and
 		/// look in the logs for the messages below.
 		Logger.transport.error("🛜 [BLE] Will Restore State was called. Attempting to restore connection.")
-
+		
 		/// Find the peripheral that was connected before
 		guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
 			  let peripheral = peripherals.first else {
 			Logger.transport.error("🛜 [BLE] No peripherals found in restore state dictionary.")
 			return
 		}
-
+		
 		// Prevent device discovery during the restore process
 		restoreInProgress = true
 
