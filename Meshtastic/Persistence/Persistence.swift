@@ -334,8 +334,8 @@ final class PersistenceController: ObservableObject {
 		}
 
 		state = .preparing
-		await Task.detached(priority: .userInitiated) {
-			CoreDataMigrationService.prepareForMigration()
+		try await Task.detached(priority: .userInitiated) {
+			try CoreDataMigrationService.prepareForMigration()
 		}.value
 
 		let loadedContainer = try Self.makeContainer(

@@ -92,7 +92,7 @@ final class CoreDataMigrationServiceTests: XCTestCase {
 		XCTAssertTrue(CoreDataMigrationService.legacyStoreExists())
 
 		// Destination store, as the rescued user's app would have it: node 222 re-taught by
-		// the mesh (with a fresher bleName and a live device config), message 1002 re-received.
+		// the mesh with only partial scalar/user data, and message 1002 re-received.
 		let schema = Schema(versionedSchema: MeshtasticSchema.current)
 		let config = ModelConfiguration("MigrationTest", schema: schema, isStoredInMemoryOnly: true, allowsSave: true)
 		let container = try ModelContainer(for: schema, configurations: config)
@@ -107,10 +107,20 @@ final class CoreDataMigrationServiceTests: XCTestCase {
 		liveUser.longName = "Live User 222"
 		liveUser.userNode = liveNode
 		context.insert(liveUser)
+		let liveInfo = MyInfoEntity()
+		liveInfo.myNodeNum = 222
+		liveInfo.bleName = "live-info"
+		liveInfo.myInfoNode = liveNode
+		context.insert(liveInfo)
+		let liveChannel = ChannelEntity()
+		liveChannel.index = 0
+		liveChannel.name = "LiveChan"
+		liveChannel.myInfoChannel = liveInfo
+		context.insert(liveChannel)
 		let liveConfig = DeviceConfigEntity()
 		liveConfig.role = 1
+		liveConfig.deviceConfigNode = liveNode
 		context.insert(liveConfig)
-		liveNode.deviceConfig = liveConfig
 		let liveMessage = MessageEntity()
 		liveMessage.messageId = 1002
 		liveMessage.messagePayload = "live copy"
@@ -126,9 +136,10 @@ final class CoreDataMigrationServiceTests: XCTestCase {
 		)
 		let migrationRanOnMainThread = await executionRecorder.ranOnMainThread
 		XCTAssertEqual(migrationRanOnMainThread, false)
+		let migratedContext = ModelContext(container)
 
 		// Node 111 migrated with its user and config; node 222 kept, not duplicated.
-		let nodes = try context.fetch(FetchDescriptor<NodeInfoEntity>())
+		let nodes = try migratedContext.fetch(FetchDescriptor<NodeInfoEntity>())
 		XCTAssertEqual(nodes.count, 2, "expected legacy node 111 + live node 222, no duplicates")
 		let node111 = try XCTUnwrap(nodes.first(where: { $0.num == 111 }))
 		XCTAssertEqual(node111.bleName, "legacy-111")
@@ -137,27 +148,34 @@ final class CoreDataMigrationServiceTests: XCTestCase {
 		let node222 = try XCTUnwrap(nodes.first(where: { $0.num == 222 }))
 		XCTAssertEqual(node222.bleName, "live-222", "live node must not be overwritten by the legacy row")
 		XCTAssertEqual(node222.user?.longName, "Live User 222", "live node must keep its fresher user")
-		XCTAssertEqual(node222.deviceConfig?.role, 1, "live node must keep its fresher config")
+		XCTAssertEqual(node222.user?.shortName, "L222", "legacy fields missing from the live user must merge")
+		XCTAssertEqual(node222.deviceConfig?.role, 1, "live config values must remain fresher")
+		XCTAssertEqual(node222.deviceConfig?.buttonGpio, 44, "missing live config fields must merge")
 
 		// Users deduped by num.
-		let users = try context.fetch(FetchDescriptor<UserEntity>())
+		let users = try migratedContext.fetch(FetchDescriptor<UserEntity>())
 		XCTAssertEqual(users.filter { $0.num == 222 }.count, 1, "user 222 must not be duplicated")
 
 		// Message 1001 fills the gap; 1002 is not duplicated and keeps the live payload.
-		let messages = try context.fetch(FetchDescriptor<MessageEntity>())
+		let messages = try migratedContext.fetch(FetchDescriptor<MessageEntity>())
 		XCTAssertEqual(messages.count, 2)
 		XCTAssertEqual(messages.first(where: { $0.messageId == 1001 })?.messagePayload, "legacy hello")
 		let dupes = messages.filter { $0.messageId == 1002 }
 		XCTAssertEqual(dupes.count, 1)
 		XCTAssertEqual(dupes.first?.messagePayload, "live copy")
+		XCTAssertGreaterThan(dupes.first?.messageTimestamp ?? 0, 0)
+		XCTAssertEqual(dupes.first?.fromUser?.num, 222)
 
-		// MyInfo + its channel migrate (they only existed in the legacy store).
-		let infos = try context.fetch(FetchDescriptor<MyInfoEntity>())
-		XCTAssertEqual(infos.count, 1)
-		XCTAssertEqual(infos.first?.myNodeNum, 111)
-		let channels = try context.fetch(FetchDescriptor<ChannelEntity>())
-		XCTAssertEqual(channels.count, 1)
-		XCTAssertEqual(channels.first?.name, "LegacyChan")
+		// Legacy-only MyInfo migrates, while partial live MyInfo and channels are completed.
+		let infos = try migratedContext.fetch(FetchDescriptor<MyInfoEntity>())
+		XCTAssertEqual(infos.count, 2)
+		XCTAssertEqual(infos.first(where: { $0.myNodeNum == 222 })?.bleName, "live-info")
+		XCTAssertEqual(infos.first(where: { $0.myNodeNum == 222 })?.pioEnv, "legacy-pio")
+		let channels = try migratedContext.fetch(FetchDescriptor<ChannelEntity>())
+		XCTAssertEqual(channels.count, 3)
+		XCTAssertNotNil(channels.first(where: { $0.name == "LegacyChan" }))
+		XCTAssertNotNil(channels.first(where: { $0.name == "LiveChan" }))
+		XCTAssertNotNil(channels.first(where: { $0.name == "LegacyChan222" }))
 
 		// The legacy store is retired so the migration never runs again.
 		XCTAssertFalse(CoreDataMigrationService.legacyStoreExists(), "legacy store should be renamed after a successful migration")
@@ -205,9 +223,13 @@ final class CoreDataMigrationServiceTests: XCTestCase {
 
 		let myInfo = insert("MyInfoEntity", ["myNodeNum": Int64(111)])
 		myInfo.setValue(node111, forKey: "myInfoNode")
+		let myInfo222 = insert("MyInfoEntity", ["myNodeNum": Int64(222), "pioEnv": "legacy-pio"])
+		myInfo222.setValue(node222, forKey: "myInfoNode")
 
 		let channel = insert("ChannelEntity", ["index": Int32(0), "name": "LegacyChan", "role": Int32(1)])
 		channel.setValue(myInfo, forKey: "myInfoChannel")
+		let channel222 = insert("ChannelEntity", ["index": Int32(1), "name": "LegacyChan222", "role": Int32(1)])
+		channel222.setValue(myInfo222, forKey: "myInfoChannel")
 
 		let message1001 = insert("MessageEntity", [
 			"messageId": Int64(1001), "messagePayload": "legacy hello",
@@ -220,11 +242,10 @@ final class CoreDataMigrationServiceTests: XCTestCase {
 		])
 		message1002.setValue(user222, forKey: "fromUser")
 
-		// Configs: one on the legacy-only node (should migrate) and one on the node the
-		// live store also has (must be skipped in favor of the live config).
+		// Configs: one on the legacy-only node and one on the partially re-taught node.
 		let config111 = insert("DeviceConfigEntity", ["role": Int32(5)])
 		config111.setValue(node111, forKey: "deviceConfigNode")
-		let config222 = insert("DeviceConfigEntity", ["role": Int32(9)])
+		let config222 = insert("DeviceConfigEntity", ["buttonGpio": Int32(44), "role": Int32(9)])
 		config222.setValue(node222, forKey: "deviceConfigNode")
 
 		try ctx.save()
