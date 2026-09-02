@@ -26,6 +26,7 @@ struct MeshtasticAppleApp: App {
 	@State var saveChannelLink: SaveChannelLinkData?
 	@State var incomingUrl: URL?
 	@State private var persistenceReady = false
+	@State private var migrationBootstrapState: MigrationBootstrapState = .migrating
 	@State private var didStartReadyServices = false
 
 	private static let isRunningTests = NSClassFromString("XCTestCase") != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -36,8 +37,19 @@ struct MeshtasticAppleApp: App {
 		return false
 		#endif
 	}()
+	private static let migrationBootstrapPreviewState: MigrationBootstrapState? = {
+		#if DEBUG
+		if CommandLine.arguments.contains("--migration-bootstrap-preview-failed") {
+			return .failed("Test migration error")
+		}
+		if CommandLine.arguments.contains("--migration-bootstrap-preview") {
+			return .migrating
+		}
+		#endif
+		return nil
+	}()
 	private static var shouldInitializeAppServices: Bool {
-		!isRunningTests && !isChirpyOTADemo
+		!isRunningTests && !isChirpyOTADemo && migrationBootstrapPreviewState == nil
 	}
 	/// TipKit configuration must run once per process; the owning `.task` re-runs whenever the
 	/// database-reset gate remounts the main tree after a node switch.
@@ -103,7 +115,20 @@ struct MeshtasticAppleApp: App {
 
 		}
 
-		accessoryManager = AccessoryManager.shared
+		let accessoryManager: AccessoryManager
+		let persistenceController: PersistenceController
+		if Self.shouldInitializeAppServices {
+			accessoryManager = AccessoryManager.shared
+			persistenceController = PersistenceController.shared
+		} else {
+			accessoryManager = AccessoryManager(transports: [])
+			persistenceController = PersistenceController(
+				inMemory: true,
+				storeName: "MigrationBootstrapPreview"
+			)
+		}
+		self.accessoryManager = accessoryManager
+		self.persistenceController = persistenceController
 		accessoryManager.appState = appState
 
 		// Lockdown coordinator. Constructed here so it lives at app scope and is
@@ -115,7 +140,6 @@ struct MeshtasticAppleApp: App {
 		self._lockdownCoordinator = StateObject(wrappedValue: lockdown)
 
 		self._appState = StateObject(wrappedValue: appState)
-		self.persistenceController = PersistenceController.shared
 
 		// Wire up router
 #if os(iOS)
@@ -130,6 +154,10 @@ struct MeshtasticAppleApp: App {
 			  persistenceReady,
 			  !didStartReadyServices else { return }
 		didStartReadyServices = true
+
+#if os(iOS)
+		appDelegate.startPersistenceServicesIfNeeded()
+#endif
 
 #if DEBUG
 		let performanceSeedConfiguration = PerformanceSeedData.configuration
@@ -148,9 +176,6 @@ struct MeshtasticAppleApp: App {
 
 		MapDataManager.shared.initialize()
 		_ = WatchSessionManager.shared
-#if os(iOS)
-		TAKServerManager.shared.initializeOnStartup()
-#endif
 #if DEBUG
 		if !CommandLine.arguments.contains("--marketing-capture") {
 			try? Tips.resetDatastore()
@@ -217,15 +242,32 @@ struct MeshtasticAppleApp: App {
 		return true
 	}
 
+	@MainActor
+	private func bootstrapPersistence() async {
+		migrationBootstrapState = .migrating
+		do {
+			try await persistenceController.bootstrap()
+			persistenceReady = true
+			startReadyServicesIfNeeded()
+		} catch {
+			migrationBootstrapState = .failed(error.localizedDescription)
+		}
+	}
+
 	var body: some Scene {
 		WindowGroup {
 			Group {
-			if Self.isRunningTests {
+			if let previewState = Self.migrationBootstrapPreviewState {
+				MigrationBootstrapView(state: previewState, retry: {})
+			} else if Self.isRunningTests {
 				Color.clear
 			} else if Self.isChirpyOTADemo {
 				FirmwareUpdateGameDemoHost()
 			} else if !persistenceReady {
-				ProgressView("Updating local data…")
+				MigrationBootstrapView(
+					state: migrationBootstrapState,
+					retry: { Task { await bootstrapPersistence() } }
+				)
 			} else if appState.isDatabaseResetting {
 				// Unmount the WHOLE SwiftData-bound tree — including the `.modelContainer`
 				// modifier in mainAppContent — while a node switch clears the store. The
@@ -251,9 +293,7 @@ struct MeshtasticAppleApp: App {
 			}
 			.task {
 				guard Self.shouldInitializeAppServices else { return }
-				await persistenceController.bootstrap()
-				persistenceReady = true
-				startReadyServicesIfNeeded()
+				await bootstrapPersistence()
 			}
 		}
 		.onChange(of: scenePhase) { (_, newScenePhase) in

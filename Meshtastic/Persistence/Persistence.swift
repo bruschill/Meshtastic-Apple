@@ -37,7 +37,8 @@ class PersistenceController {
 	/// Remembered so the store can be reopened in a fresh container — see `recreateContainer()`.
 	private let storeName: String
 	private let inMemory: Bool
-	private var bootstrapTask: Task<Void, Never>?
+	private var preparationError: Error?
+	private var bootstrapTask: Task<Void, Error>?
 
 	var context: ModelContext {
 		container.mainContext
@@ -222,6 +223,7 @@ class PersistenceController {
 			isStoredInMemoryOnly: inMemory,
 			allowsSave: true
 		)
+		var preparationFailed = false
 
 #if DEBUG
 		if !inMemory && !isTestEnvironment && PerformanceSeedData.configuration?.resetStore == true {
@@ -247,16 +249,24 @@ class PersistenceController {
 			do {
 				try CoreDataMigrationService.prepareForMigration()
 			} catch {
-				fatalError("Legacy store preparation failed: \(error.localizedDescription)")
+				preparationFailed = true
+				preparationError = error
+				Logger.data.error("Legacy store preparation failed: \(error.localizedDescription, privacy: .public)")
 			}
 		}
 
 		// ── Step 1: build the SwiftData container ────────────────────────────
 		do {
-			if inMemory {
+			if inMemory || preparationFailed {
+				let memoryConfig = ModelConfiguration(
+					storeName,
+					schema: schema,
+					isStoredInMemoryOnly: true,
+					allowsSave: true
+				)
 				container = try ModelContainer(
 					for: schema,
-					configurations: config
+					configurations: memoryConfig
 				)
 			} else {
 				container = try ModelContainer(
@@ -268,6 +278,9 @@ class PersistenceController {
 			container.mainContext.autosaveEnabled = false
 			Logger.data.info("💾 SwiftData store initialized successfully")
 		} catch {
+			if preparationFailed {
+				fatalError("SwiftData in-memory fallback failed: \(error.localizedDescription)")
+			}
 			// The store could not be opened. Before treating that as corruption, rule out
 			// data protection: launched in the background before the user's first unlock
 			// (Bluetooth state restoration does this after a phone reboot), the store file
@@ -351,26 +364,52 @@ class PersistenceController {
 
 	}
 
+	private func replacePreparationFallbackContainer() throws {
+		let schema = Schema(versionedSchema: MeshtasticSchema.current)
+		let config = ModelConfiguration(
+			storeName,
+			schema: schema,
+			isStoredInMemoryOnly: false,
+			allowsSave: true
+		)
+		let persistentContainer = try ModelContainer(
+			for: schema,
+			migrationPlan: MeshtasticMigrationPlan.self,
+			configurations: config
+		)
+		persistentContainer.mainContext.autosaveEnabled = false
+		containerGeneration &+= 1
+		container = persistentContainer
+	}
+
 	/// Finishes the one-time legacy copy before the app mounts its SwiftData view tree.
-	func bootstrap() async {
-		guard !inMemory, CoreDataMigrationService.legacyStoreExists() else { return }
+	func bootstrap() async throws {
 		if let bootstrapTask {
-			await bootstrapTask.value
+			try await bootstrapTask.value
 			return
 		}
+		guard !inMemory else { return }
+
+		if preparationError != nil {
+			try CoreDataMigrationService.prepareForMigration()
+			try replacePreparationFallbackContainer()
+			preparationError = nil
+		}
+		guard CoreDataMigrationService.migrationWorkExists() else { return }
 
 		let container = container
 		let task = Task { @MainActor in
-			do {
-				try await CoreDataMigrationService.migrateOffMain(into: container)
-			} catch {
-				// Preserve the existing behavior: migration failure does not make the app unusable.
-				Logger.data.error("⬆️ CoreDataMigrationService failed: \(error.localizedDescription, privacy: .public)")
-			}
+			try await CoreDataMigrationService.migrateOffMain(into: container)
 		}
 		bootstrapTask = task
-		await task.value
-		bootstrapTask = nil
+		do {
+			try await task.value
+			bootstrapTask = nil
+		} catch {
+			bootstrapTask = nil
+			Logger.data.error("⬆️ CoreDataMigrationService failed: \(error.localizedDescription, privacy: .public)")
+			throw error
+		}
 	}
 
 	@MainActor

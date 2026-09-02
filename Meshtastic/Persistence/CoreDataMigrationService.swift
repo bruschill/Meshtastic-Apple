@@ -167,6 +167,12 @@ enum CoreDataMigrationService {
 		FileManager.default.fileExists(atPath: locations.legacyStoreURL.path)
 	}
 
+	static func migrationWorkExists(at locations: StoreLocations = .applicationSupport) -> Bool {
+		let fileManager = FileManager.default
+		return legacyStoreExists(at: locations)
+			|| fileManager.fileExists(atPath: locations.retirementMarkerURL.path)
+	}
+
 	static func protectedStoreIsUnavailable(at locations: StoreLocations = .applicationSupport) -> Bool {
 		[locations.candidateStoreURL, locations.legacyStoreURL].contains { url in
 			FileManager.default.fileExists(atPath: url.path)

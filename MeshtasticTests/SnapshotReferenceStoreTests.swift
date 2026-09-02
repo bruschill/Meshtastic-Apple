@@ -104,6 +104,31 @@ struct SnapshotReferenceStoreTests {
 		#expect(try Data(contentsOf: referenceURL) == replacementData)
 	}
 
+	@Test("Pixel verification rejects different content with the same dimensions")
+	func pixelVerificationRejectsDifferentContent() throws {
+		let directory = FileManager.default.temporaryDirectory
+			.appendingPathComponent(UUID().uuidString, isDirectory: true)
+		let referenceURL = directory.appendingPathComponent("existing.png")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+		try pngData(width: 1, height: 1, color: .systemBlue).write(to: referenceURL)
+		let newData = try pngData(width: 1, height: 1, color: .systemRed)
+
+		do {
+			try SnapshotReferenceStore().check(
+				pngData: newData,
+				pixelDimensions: SnapshotPixelDimensions(width: 1, height: 1),
+				referenceURL: referenceURL,
+				mode: .verify,
+				comparePixels: true
+			)
+			Issue.record("Pixel verification unexpectedly accepted changed content")
+		} catch let error as SnapshotReferenceError {
+			#expect(error == .contentMismatch(differingPixels: 1, totalPixels: 1))
+		}
+	}
+
 	@Test("Verification does not replace a reference with different dimensions")
 	func verificationDoesNotReplaceDimensionMismatch() throws {
 		let directory = FileManager.default.temporaryDirectory
@@ -134,11 +159,15 @@ struct SnapshotReferenceStoreTests {
 		#expect(try Data(contentsOf: referenceURL) == referenceData)
 	}
 
-	private func pngData(width: Int, height: Int) throws -> Data {
+	private func pngData(
+		width: Int,
+		height: Int,
+		color: UIColor = .systemBlue
+	) throws -> Data {
 		let format = UIGraphicsImageRendererFormat()
 		format.scale = 1
 		let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { context in
-			UIColor.systemBlue.setFill()
+			color.setFill()
 			context.fill(CGRect(x: 0, y: 0, width: width, height: height))
 		}
 		return try #require(image.pngData())

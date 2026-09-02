@@ -202,6 +202,16 @@ final class LegacyMigrationRetryTests: XCTestCase {
 		}
 	}
 
+	func testRetirementMarkerKeepsBootstrapPending() throws {
+		let locations = try makeLocations()
+		try Data().write(to: locations.retirementMarkerURL)
+
+		XCTAssertTrue(CoreDataMigrationService.migrationWorkExists(at: locations))
+
+		try FileManager.default.removeItem(at: locations.retirementMarkerURL)
+		XCTAssertFalse(CoreDataMigrationService.migrationWorkExists(at: locations))
+	}
+
 	@MainActor
 	func testBatchSizesProduceIdenticalHistory() async throws {
 		for batchSize in [1, 2, 10] {

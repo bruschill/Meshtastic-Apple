@@ -14,11 +14,22 @@ import OSLog
 class MeshtasticAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate, ObservableObject {
 
 	var router: Router?
+	private var didStartPersistenceServices = false
+
+	private static var isMigrationBootstrapPreview: Bool {
+		#if DEBUG
+		CommandLine.arguments.contains("--migration-bootstrap-preview")
+			|| CommandLine.arguments.contains("--migration-bootstrap-preview-failed")
+		#else
+		false
+		#endif
+	}
 
 	func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
 		guard NSClassFromString("XCTestCase") == nil && ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
 			return true
 		}
+		guard !Self.isMigrationBootstrapPreview else { return true }
 		Logger.services.info("🚀 [App] Meshtstic Apple App launched!")
 		// Default User Default Values
 		UserDefaults.standard.register(defaults: ["meshMapRecentering": true])
@@ -31,16 +42,26 @@ class MeshtasticAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificat
 		}
 #endif
 		UNUserNotificationCenter.current().delegate = self
+		return true
+	}
+
+	@MainActor
+	func startPersistenceServicesIfNeeded() {
+		guard !didStartPersistenceServices else { return }
+		didStartPersistenceServices = true
+#if DEBUG
+		guard PerformanceSeedData.configuration == nil else {
+			Logger.services.info("📈 [PerfSeed] Skipping location, TAK, and Siri startup for simulator performance run")
+			return
+		}
+#endif
 		let locationsHandler = LocationsHandler.shared
 		locationsHandler.startLocationUpdates()
 		// If a background activity session was previously active, reinstantiate it after the background launch.
 		if locationsHandler.backgroundActivity {
 			locationsHandler.backgroundActivity = true
 		}
-		// Initialize TAK Server if enabled
-		Task { @MainActor in
-			TAKServerManager.shared.initializeOnStartup()
-		}
+		TAKServerManager.shared.initializeOnStartup()
 		// Request Siri authorization so intent donations work and CarPlay messaging is available.
 		#if !targetEnvironment(macCatalyst)
 		#if targetEnvironment(simulator)
@@ -51,7 +72,6 @@ class MeshtasticAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificat
 		}
 		#endif
 		#endif
-		return true
 	}
 
 	// MARK: - SiriKit Intent Handling
