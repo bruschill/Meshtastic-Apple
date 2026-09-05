@@ -67,25 +67,20 @@ enum LocationUpdatePurpose: Hashable {
 		}
 	}
 
-	// The continuation we will use to asynchronously ask the user permission to track their location.
-	// This is an Optional to ensure it can be nilled out after use.
-	private var permissionContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
+	private var permissionContinuations = [CheckedContinuation<CLAuthorizationStatus, Never>]()
 	private var permissionTimeoutTask: Task<Void, Never>?
-
-	// A flag to prevent multiple concurrent permission requests
 	private var isRequestingPermission = false
 
 	/// Requests "Always" location authorization from the user.
-	/// It includes a timeout so the request can be retried if no delegate callback arrives.
+	/// Overlapping callers share the pending result. A timeout allows a later retry if no delegate callback arrives.
 	func requestLocationAlwaysPermissions() async -> CLAuthorizationStatus {
-		guard !isRequestingPermission else {
-			Logger.services.debug("📍 [App] requestLocationAlwaysPermissions called while a request is already active. Returning current status.")
-			return manager.authorizationStatus
-		}
-		isRequestingPermission = true
-
-		let status = await withCheckedContinuation { continuation in
-			permissionContinuation = continuation
+		await withCheckedContinuation { continuation in
+			permissionContinuations.append(continuation)
+			guard !isRequestingPermission else {
+				Logger.services.debug("📍 [App] Joining an active location permission request.")
+				return
+			}
+			isRequestingPermission = true
 			manager.requestAlwaysAuthorization()
 
 			permissionTimeoutTask = Task { @MainActor in
@@ -94,28 +89,30 @@ enum LocationUpdatePurpose: Hashable {
 				} catch {
 					return
 				}
-				guard let continuation = permissionContinuation else { return }
+				guard isRequestingPermission else { return }
 				Logger.services.warning("📍 [App] Location permission request timed out.")
-				continuation.resume(returning: .denied)
-				permissionContinuation = nil
-				permissionTimeoutTask = nil
+				finishPermissionRequest(with: .denied)
 			}
 		}
+	}
+
+	private func finishPermissionRequest(with status: CLAuthorizationStatus) {
+		guard isRequestingPermission else { return }
+		let continuations = permissionContinuations
+		permissionContinuations.removeAll()
 		permissionTimeoutTask?.cancel()
 		permissionTimeoutTask = nil
 		isRequestingPermission = false
-		permissionContinuation = nil
-		return status
+		for continuation in continuations {
+			continuation.resume(returning: status)
+		}
 	}
 
 	/// Delegate method called when the location authorization status changes.
 	/// - Parameter manager: The CLLocationManager instance.
 	func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-		if let continuation = permissionContinuation {
-			continuation.resume(returning: manager.authorizationStatus)
-			permissionContinuation = nil
-			permissionTimeoutTask?.cancel()
-			permissionTimeoutTask = nil
+		if isRequestingPermission {
+			finishPermissionRequest(with: manager.authorizationStatus)
 		} else {
 			Logger.services.debug("📍 [App] Location authorization changed without an active permission request.")
 		}

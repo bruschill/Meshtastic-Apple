@@ -362,7 +362,7 @@ struct MQTTConfig: View {
 		}
 		.onChange(of: locationsHandler.locationsArray.last) { _, location in
 			if location != nil && nearbyTopics.isEmpty {
-				setMqttValues()
+				updateNearbyTopics()
 			}
 		}
 		.locationUpdates(for: .userInterface)
@@ -370,37 +370,39 @@ struct MQTTConfig: View {
 }
 
 private extension MQTTConfig {
-	func setMqttValues() {
+	func updateNearbyTopics() {
 		nearbyTopics = []
-		let geocoder = CLGeocoder()
-		if locationsHandler.locationsArray.count > 0 {
-			let region  = RegionCodes(rawValue: Int(node?.loRaConfig?.regionCode ?? 0))
-			defaultTopic = "msh/" + (region?.topic ?? "UNSET")
-			geocoder.reverseGeocodeLocation(locationsHandler.locationsArray.first!, completionHandler: {(placemarks, error) in
-				if let error {
-					Logger.services.error("Failed to reverse geocode location: \(error.localizedDescription, privacy: .public)")
-					return
+		guard let location = locationsHandler.locationsArray.first else { return }
+		let region = RegionCodes(rawValue: Int(node?.loRaConfig?.regionCode ?? 0))
+		defaultTopic = "msh/" + (region?.topic ?? "UNSET")
+		CLGeocoder().reverseGeocodeLocation(location) { placemarks, error in
+			if let error {
+				Logger.services.error("Failed to reverse geocode location: \(error.localizedDescription, privacy: .public)")
+				return
+			}
+			if let placemark = placemarks?.first {
+				if !(region?.isCountry ?? false) {
+					let countryTopic = defaultTopic + "/" + (placemark.isoCountryCode ?? "")
+					if !countryTopic.isEmpty { nearbyTopics.append(countryTopic) }
 				}
-				if let placemarks = placemarks, let placemark = placemarks.first {
-					if !(region?.isCountry ?? false) {
-						let countryTopic = defaultTopic + "/" + (placemark.isoCountryCode ?? "")
-						if !countryTopic.isEmpty { nearbyTopics.append(countryTopic) }
-					}
-					let stateTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "")
-					if !stateTopic.isEmpty { nearbyTopics.append(stateTopic) }
-					let countyTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "") + "/" + (placemark.subAdministrativeArea?.lowercased().replacingOccurrences(of: " ", with: "") ?? "")
-					if !countyTopic.isEmpty { nearbyTopics.append(countyTopic) }
-					let cityTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "") + "/" + (placemark.locality?.lowercased().replacingOccurrences(of: " ", with: "") ?? "")
-					if !cityTopic.isEmpty { nearbyTopics.append(cityTopic) }
-					let neighborhoodTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "") + "/" + (placemark.subLocality?.lowercased()
-						.replacingOccurrences(of: " ", with: "")
-						.replacingOccurrences(of: "'", with: "") ?? "")
-					if !neighborhoodTopic.isEmpty { nearbyTopics.append(neighborhoodTopic) }
-				} else {
-					Logger.services.debug("No Location")
-				}
-			})
+				let stateTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "")
+				if !stateTopic.isEmpty { nearbyTopics.append(stateTopic) }
+				let countyTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "") + "/" + (placemark.subAdministrativeArea?.lowercased().replacingOccurrences(of: " ", with: "") ?? "")
+				if !countyTopic.isEmpty { nearbyTopics.append(countyTopic) }
+				let cityTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "") + "/" + (placemark.locality?.lowercased().replacingOccurrences(of: " ", with: "") ?? "")
+				if !cityTopic.isEmpty { nearbyTopics.append(cityTopic) }
+				let neighborhoodTopic = defaultTopic + "/" + (placemark.administrativeArea ?? "") + "/" + (placemark.subLocality?.lowercased()
+					.replacingOccurrences(of: " ", with: "")
+					.replacingOccurrences(of: "'", with: "") ?? "")
+				if !neighborhoodTopic.isEmpty { nearbyTopics.append(neighborhoodTopic) }
+			} else {
+				Logger.services.debug("No Location")
+			}
 		}
+	}
+
+	func setMqttValues() {
+		updateNearbyTopics()
 		self.enabled = node?.mqttConfig?.enabled ?? false
 		self.proxyToClientEnabled = node?.mqttConfig?.proxyToClientEnabled ?? false
 		self.address = node?.mqttConfig?.address ?? ""

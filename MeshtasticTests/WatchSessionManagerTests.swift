@@ -8,17 +8,41 @@ private final class RecordingLocationManager: CLLocationManager {
 	var requestAlwaysAuthorizationCallCount = 0
 	var startUpdatingLocationCallCount = 0
 	var stopUpdatingLocationCallCount = 0
+	private var authorizationCallWaiter: (callCount: Int, continuation: CheckedContinuation<Void, Never>)?
+	private var startCallWaiter: (callCount: Int, continuation: CheckedContinuation<Void, Never>)?
 
 	override var authorizationStatus: CLAuthorizationStatus {
 		authorizationStatusOverride
 	}
 
+	func waitForRequestAlwaysAuthorization(callCount: Int = 1) async {
+		guard requestAlwaysAuthorizationCallCount < callCount else { return }
+		await withCheckedContinuation { continuation in
+			authorizationCallWaiter = (callCount, continuation)
+		}
+	}
+
+	func waitForStartUpdatingLocation(callCount: Int = 1) async {
+		guard startUpdatingLocationCallCount < callCount else { return }
+		await withCheckedContinuation { continuation in
+			startCallWaiter = (callCount, continuation)
+		}
+	}
+
 	override func requestAlwaysAuthorization() {
 		requestAlwaysAuthorizationCallCount += 1
+		if let waiter = authorizationCallWaiter, requestAlwaysAuthorizationCallCount >= waiter.callCount {
+			authorizationCallWaiter = nil
+			waiter.continuation.resume()
+		}
 	}
 
 	override func startUpdatingLocation() {
 		startUpdatingLocationCallCount += 1
+		if let waiter = startCallWaiter, startUpdatingLocationCallCount >= waiter.callCount {
+			startCallWaiter = nil
+			waiter.continuation.resume()
+		}
 	}
 
 	override func stopUpdatingLocation() {
@@ -201,7 +225,7 @@ struct LocationDemandLifecycleTests {
 			await handler.location(for: .watchSync, timeout: .seconds(1))
 		}
 
-		await Task.yield()
+		await manager.waitForStartUpdatingLocation()
 		#expect(manager.startUpdatingLocationCallCount == 1)
 		handler.locationManager(manager, didUpdateLocations: [expected])
 
@@ -238,6 +262,30 @@ struct LocationDemandLifecycleTests {
 		#expect(manager.requestAlwaysAuthorizationCallCount == 2)
 	}
 
+	@Test func overlappingPermissionRequestsShareResult() async {
+		let manager = RecordingLocationManager()
+		manager.authorizationStatusOverride = .notDetermined
+		let handler = LocationsHandler(
+			manager: manager,
+			backgroundActivity: false,
+			backgroundActivitySessionFactory: { nil },
+			permissionRequestTimeout: .milliseconds(200)
+		)
+		let firstRequest = Task { @MainActor in
+			await handler.requestLocationAlwaysPermissions()
+		}
+		await manager.waitForRequestAlwaysAuthorization()
+		let secondRequest = Task { @MainActor in
+			await handler.requestLocationAlwaysPermissions()
+		}
+
+		let firstStatus = await firstRequest.value
+		let secondStatus = await secondRequest.value
+
+		#expect(firstStatus == secondStatus)
+		#expect(manager.requestAlwaysAuthorizationCallCount == 1)
+	}
+
 	@Test func completedPermissionRequestCancelsItsTimeout() async {
 		let manager = RecordingLocationManager()
 		let handler = LocationsHandler(
@@ -249,7 +297,7 @@ struct LocationDemandLifecycleTests {
 		let firstRequest = Task { @MainActor in
 			await handler.requestLocationAlwaysPermissions()
 		}
-		await Task.yield()
+		await manager.waitForRequestAlwaysAuthorization()
 		handler.locationManagerDidChangeAuthorization(manager)
 		_ = await firstRequest.value
 
@@ -257,13 +305,12 @@ struct LocationDemandLifecycleTests {
 		let secondRequest = Task { @MainActor in
 			await handler.requestLocationAlwaysPermissions()
 		}
-		await Task.yield()
+		await manager.waitForRequestAlwaysAuthorization(callCount: 2)
 		try? await Task.sleep(for: .milliseconds(100))
 
-		_ = await handler.requestLocationAlwaysPermissions()
 		#expect(manager.requestAlwaysAuthorizationCallCount == 2)
-
 		handler.locationManagerDidChangeAuthorization(manager)
-		_ = await secondRequest.value
+		let status = await secondRequest.value
+		#expect(status == .authorizedAlways)
 	}
 }
