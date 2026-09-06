@@ -99,9 +99,7 @@ struct NodeList: View {
 			// Shown after the radio's LoRa settings move it to a different channel. A banner rather
 			// than an alert on the settings screen: a LoRa write reboots the radio, so anything modal
 			// at save time competes with the reconnect, and this needs to survive being missed.
-			if let connectedNodeNum = accessoryManager.activeDeviceNum {
-				UnheardNodesBanner(connectedNodeNum: connectedNodeNum)
-			}
+			UnheardNodesBanner()
 		}
 		.safeAreaInset(edge: .bottom, alignment: .leading) {
 			HStack {

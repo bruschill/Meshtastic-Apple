@@ -54,12 +54,19 @@ enum LoRaConfigChange {
 		"loraChannelChangedAt.\(nodeNum)"
 	}
 
+	/// Stored as epoch seconds rather than a `Date`: it reads back from the argument domain, so a
+	/// launch argument can stand in for a real channel change when driving the app in a simulator,
+	/// and the value is legible in the preferences plist.
 	static func changedAt(forNode nodeNum: Int64, store: UserDefaults = .standard) -> Date? {
-		store.object(forKey: key(forNode: nodeNum)) as? Date
+		// double(forKey:) rather than object(forKey:) as? Double: it coerces, so the value reads back
+		// whether it was written as a number or arrived as a string from the argument domain.
+		let seconds = store.double(forKey: key(forNode: nodeNum))
+		guard seconds > 0 else { return nil }
+		return Date(timeIntervalSince1970: seconds)
 	}
 
 	static func recordChange(forNode nodeNum: Int64, at date: Date = .now, store: UserDefaults = .standard) {
-		store.set(date, forKey: key(forNode: nodeNum))
+		store.set(date.timeIntervalSince1970, forKey: key(forNode: nodeNum))
 	}
 
 	static func clear(forNode nodeNum: Int64, store: UserDefaults = .standard) {
@@ -79,14 +86,14 @@ enum LoRaConfigChange {
 	/// again instead of staying silent forever.
 	static func dismissOffer(forNode nodeNum: Int64, store: UserDefaults = .standard) {
 		guard let changedAt = changedAt(forNode: nodeNum, store: store) else { return }
-		store.set(changedAt, forKey: dismissedKey(forNode: nodeNum))
+		store.set(changedAt.timeIntervalSince1970, forKey: dismissedKey(forNode: nodeNum))
 	}
 
 	/// Whether to offer the cleanup for this radio's most recent channel change.
 	static func shouldOfferCleanup(forNode nodeNum: Int64, store: UserDefaults = .standard) -> Bool {
 		guard let changedAt = changedAt(forNode: nodeNum, store: store) else { return false }
-		let dismissed = store.object(forKey: dismissedKey(forNode: nodeNum)) as? Date
-		return dismissed != changedAt
+		let dismissed = store.double(forKey: dismissedKey(forNode: nodeNum))
+		return dismissed != changedAt.timeIntervalSince1970
 	}
 
 	/// Whether this node has not been heard since the radio changed channel.

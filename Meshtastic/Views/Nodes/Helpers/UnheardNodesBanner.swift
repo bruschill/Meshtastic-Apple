@@ -19,7 +19,6 @@ import OSLog
 /// removed without the user asking — a node may simply be out of range rather than on another preset,
 /// and it comes back on its own when it is next heard.
 struct UnheardNodesBanner: View {
-	let connectedNodeNum: Int64
 	@Environment(\.modelContext) private var context
 	@EnvironmentObject private var accessoryManager: AccessoryManager
 
@@ -27,17 +26,23 @@ struct UnheardNodesBanner: View {
 	@State private var isConfirming = false
 	@State private var isRemoving = false
 
+	/// Resolved here rather than passed in. A parent that only builds this view once a radio is
+	/// connected has to be re-evaluated when one arrives, and inside a `safeAreaInset` that
+	/// evaluates during layout — before the connection is established — it simply stays empty.
+	private var connectedNodeNum: Int64? { accessoryManager.activeDeviceNum }
+
 	var body: some View {
 		Group {
-			if !unheardNodes.isEmpty, LoRaConfigChange.shouldOfferCleanup(forNode: connectedNodeNum) {
-				content
+			if let connectedNodeNum, !unheardNodes.isEmpty,
+			   LoRaConfigChange.shouldOfferCleanup(forNode: connectedNodeNum) {
+				content(connectedNodeNum: connectedNodeNum)
 			}
 		}
 		.onAppear(perform: refresh)
 		.onChange(of: accessoryManager.activeDeviceNum) { _, _ in refresh() }
 	}
 
-	private var content: some View {
+	private func content(connectedNodeNum: Int64) -> some View {
 		HStack(alignment: .top, spacing: 12) {
 			Image(systemName: "antenna.radiowaves.left.and.right.slash")
 				.font(.title3)
@@ -53,11 +58,12 @@ struct UnheardNodesBanner: View {
 					.font(.caption)
 					.foregroundStyle(.secondary)
 
-				HStack {
+				HStack(spacing: 12) {
 					Button(role: .destructive) {
 						isConfirming = true
 					} label: {
 						Text("Remove Them")
+							.frame(minWidth: 48, minHeight: 48)
 					}
 					.buttonStyle(.borderedProminent)
 					.disabled(isRemoving)
@@ -67,11 +73,11 @@ struct UnheardNodesBanner: View {
 						refresh()
 					} label: {
 						Text("Keep")
+							.frame(minWidth: 48, minHeight: 48)
 					}
 					.buttonStyle(.bordered)
 					.disabled(isRemoving)
 				}
-				.controlSize(.small)
 			}
 			Spacer(minLength: 0)
 		}
@@ -85,7 +91,7 @@ struct UnheardNodesBanner: View {
 			titleVisibility: .visible
 		) {
 			Button(role: .destructive) {
-				Task { await removeUnheardNodes() }
+				Task { await removeUnheardNodes(connectedNodeNum: connectedNodeNum) }
 			} label: {
 				Text("Remove", comment: "Confirms removing nodes not heard since the settings changed")
 			}
@@ -99,6 +105,10 @@ struct UnheardNodesBanner: View {
 
 	/// Nodes heard before the change and not since, excluding favorites and the radio itself.
 	private func refresh() {
+		guard let connectedNodeNum else {
+			unheardNodes = []
+			return
+		}
 		guard let changedAt = LoRaConfigChange.changedAt(forNode: connectedNodeNum) else {
 			unheardNodes = []
 			return
@@ -122,24 +132,41 @@ struct UnheardNodesBanner: View {
 		}
 	}
 
-	private func removeUnheardNodes() async {
+	private func removeUnheardNodes(connectedNodeNum: Int64) async {
 		isRemoving = true
 		defer { isRemoving = false }
 
+		// The list was built when the banner appeared. A node can be heard again between then and the
+		// confirmation, and removing one that has just come back is the one outcome worth avoiding
+		// here — so each is re-checked against the current lastHeard rather than trusted.
+		let changedAt = LoRaConfigChange.changedAt(forNode: connectedNodeNum)
 		var removed = 0
+		var failed = 0
+		var recovered = 0
+
 		for node in unheardNodes {
+			guard LoRaConfigChange.isUnheard(
+				lastHeard: node.lastHeard, viaMqtt: node.viaMqtt, changedAt: changedAt
+			) else {
+				recovered += 1
+				continue
+			}
 			do {
 				try await accessoryManager.removeNode(node: node, connectedNodeNum: connectedNodeNum)
 				removed += 1
 			} catch {
-				// Keep going: one node the radio refuses should not strand the rest, and whatever
-				// survives is still listed and offered again.
+				// Keep going: one node the radio refuses should not strand the rest.
+				failed += 1
 				Logger.data.error("Could not remove unheard node \(node.num.toHex(), privacy: .public): \(error.localizedDescription, privacy: .public)")
 			}
 		}
-		Logger.data.info("Removed \(removed, privacy: .public) of \(unheardNodes.count, privacy: .public) nodes not heard since the channel changed")
+		Logger.data.info("Removed \(removed, privacy: .public) nodes not heard since the channel changed, \(failed, privacy: .public) failed, \(recovered, privacy: .public) heard again before removal")
 
-		LoRaConfigChange.dismissOffer(forNode: connectedNodeNum)
+		// Only stand the offer down once nothing is left to remove. Dismissing after a partial
+		// failure would hide the banner and take the retry with it.
+		if failed == 0 {
+			LoRaConfigChange.dismissOffer(forNode: connectedNodeNum)
+		}
 		refresh()
 	}
 }
