@@ -103,10 +103,20 @@ struct UnheardNodesBanner: View {
 			unheardNodes = []
 			return
 		}
+		// Bound to a local first: a #Predicate that reaches through self for the node number throws
+		// at fetch time, and the failure is invisible — it just yields no nodes and no banner.
+		let excludedNum = connectedNodeNum
 		let descriptor = FetchDescriptor<NodeInfoEntity>(
-			predicate: #Predicate { $0.favorite == false && $0.num != connectedNodeNum }
+			predicate: #Predicate { $0.favorite == false && $0.num != excludedNum }
 		)
-		let candidates = (try? context.fetch(descriptor)) ?? []
+		let candidates: [NodeInfoEntity]
+		do {
+			candidates = try context.fetch(descriptor)
+		} catch {
+			Logger.data.error("Could not read nodes to flag after a channel change: \(error.localizedDescription, privacy: .public)")
+			unheardNodes = []
+			return
+		}
 		unheardNodes = candidates.filter {
 			LoRaConfigChange.isUnheard(lastHeard: $0.lastHeard, viaMqtt: $0.viaMqtt, changedAt: changedAt)
 		}

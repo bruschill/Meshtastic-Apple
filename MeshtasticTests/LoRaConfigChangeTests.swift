@@ -7,6 +7,7 @@
 
 import Testing
 import Foundation
+import SwiftData
 @testable import Meshtastic
 
 @Suite("LoRa channel change")
@@ -130,6 +131,53 @@ struct LoRaConfigChangeTests {
 		// A later change is a new question, not the one they already answered.
 		LoRaConfigChange.recordChange(forNode: 7, at: Date(timeIntervalSince1970: 2000), store: store)
 		#expect(LoRaConfigChange.shouldOfferCleanup(forNode: 7, store: store))
+	}
+
+
+	/// The banner's fetch, which is where the bug was: a `#Predicate` that reached through `self`
+	/// for the node number threw at fetch time, `try?` turned it into an empty result, and the
+	/// banner silently never appeared. Every other test here covers the pure logic and passed
+	/// throughout.
+	@Test("the node fetch excludes favorites and the connected radio")
+	@MainActor
+	func fetchExcludesFavoritesAndConnectedNode() throws {
+		let schema = Schema(versionedSchema: MeshtasticSchema.current)
+		let container = try ModelContainer(
+			for: schema,
+			configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+		)
+		let context = ModelContext(container)
+
+		let connectedNum: Int64 = 4242
+		func makeNode(num: Int64, favorite: Bool) {
+			let node = NodeInfoEntity()
+			node.num = num
+			node.favorite = favorite
+			node.lastHeard = Date(timeIntervalSince1970: 1000)
+			context.insert(node)
+		}
+		makeNode(num: connectedNum, favorite: false)   // the radio itself
+		makeNode(num: 1, favorite: true)               // a favorite
+		makeNode(num: 2, favorite: false)              // eligible
+		makeNode(num: 3, favorite: false)              // eligible
+		try context.save()
+
+		// Bound to a local, exactly as the view does. Reaching through self here is what threw.
+		let excludedNum = connectedNum
+		let descriptor = FetchDescriptor<NodeInfoEntity>(
+			predicate: #Predicate { $0.favorite == false && $0.num != excludedNum }
+		)
+		let candidates = try context.fetch(descriptor)
+
+		#expect(Set(candidates.map(\.num)) == [2, 3])
+
+		let flagged = candidates.filter {
+			LoRaConfigChange.isUnheard(
+				lastHeard: $0.lastHeard, viaMqtt: $0.viaMqtt,
+				changedAt: Date(timeIntervalSince1970: 2000)
+			)
+		}
+		#expect(flagged.count == 2)
 	}
 
 }
