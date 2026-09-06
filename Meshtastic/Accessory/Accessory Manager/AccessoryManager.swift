@@ -1333,6 +1333,30 @@ extension AccessoryManager {
 	var supportsStatusMessage: Bool {
 		checkIsVersionSupported(forVersion: "2.8.0")
 	}
+
+	/// Whether a LoRa config save lands without dropping the connection.
+	///
+	/// Firmware 2.8 applies every LoRa change live (firmware #9962). Before that, `set_config(lora)`
+	/// skipped the reboot only when no radio field actually changed, which a real edit never
+	/// satisfies.
+	///
+	/// Deliberately conservative where the other gates here are permissive, and read from the live
+	/// connection only. `UserDefaults.firmwareVersion` is global rather than per radio, so falling
+	/// back to it right after switching radios answers for the *previous* radio — and assuming
+	/// "no reboot" on the wrong radio is the direction that hurts: it warns nobody before a reboot
+	/// they did not expect, and turns a real post-save failure into a shrug. No live version means
+	/// assume it may reboot, which merely restores the old forgiving behavior for that window.
+	var appliesLoRaConfigWithoutReboot: Bool {
+		Self.appliesLoRaConfigWithoutReboot(liveVersion: connectedVersion)
+	}
+
+	/// Pure core of the gate, split out so tests exercise the decision without a live connection
+	/// or the global stored version.
+	nonisolated static func appliesLoRaConfigWithoutReboot(liveVersion: String?) -> Bool {
+		guard let liveVersion, !liveVersion.isEmpty else { return false }
+		let comparison = "2.8.0".compare(liveVersion, options: .numeric)
+		return comparison == .orderedAscending || comparison == .orderedSame
+	}
 }
 
 extension AccessoryManager {
